@@ -1,6 +1,6 @@
 #!/usr/bin/python
 import os
-import urllib2
+import requests
 import zipfile
 import fnmatch
 import shutil
@@ -8,6 +8,36 @@ import ConfigParser
 import re
 import argparse
 import datetime
+import hashlib
+
+dl_headers = {
+	"User-Agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/56.0.2924.51 Safari/537.36",
+	"Accept-Encoding":"identity"
+}
+
+dl_supersu = {
+	'beta': ['https://download.chainfire.eu/supersu-beta', False],
+	'stable': ['https://download.chainfire.eu/1113/SuperSU/UPDATE-SuperSU-v2.82-20170528234214.zip', '79884eda71ef17c5e9521881fd0ef043f3a683ce3c087daa099aef13b7d0f63f505ab6c987ee4b00fcb623bc0d9ea6b817c4f96edd2c039782c85bb32995ac5e'],
+}
+
+dl_apps = {
+	'Hackerskeyboard':
+		['https://f-droid.org/repo/org.pocketworkstation.pckeyboard_1039003.apk', '8c861c7540e6eeb006070d0f2d80134e75637066591d705b987e164c3fe87521ed694ac844c945eb74449aff8723ff039f793b2e3743aac73865f74bb248edf5'],
+	'Drivedroid':
+		['https://softwarebakery.com/apps/drivedroid/files/drivedroid-free-0.10.46.apk', 'c7be2ab8b600401d6df493be28f990aa4e03fb8ee13529c8323eb26ac6c416a5236a749d3b65896efec66a258570c439cd1baa5a933c118fde9f10c6961aba95'],
+	'OpenVPN':
+		['https://f-droid.org/repo/de.blinkt.openvpn_147.apk', '45ea19605926a7bd901fab435a432c37e8e23649420a40388f2513ef95e4f4fa0183c24431ed13de8c9a15ae5ef49b84a02910d10f2d77ccaf6da01f577b77d0'],
+	'USBKeyboard': # Feb 3, 2015
+		['https://github.com/pelya/android-keyboard-gadget/raw/7ea69c684aa1/USB-Keyboard.apk', '18bced7b339a67c48fe31698cb54063bce8f3dd9f7d7f23d9e5c619697e8da5ab08312cf9a2fa0e3f445a584485db23d1e4c27e3ffc1448551bbaf486ccb11e9'],
+	'RFAnalyzer':
+		['https://github.com/demantz/RFAnalyzer/raw/version_1_13/RFAnalyzer.apk', '7793438b6fbe7288a0ca86de900f5f4e607168de8c97229d08d901c2424b0192bf9dc894f66439f59510c10fa26a26319a1b0d8ea276f6af927cebf677138230'],
+	'Shodan':
+		['https://github.com/PaulSec/Shodan.io-mobile-app/raw/v0.0.3-new/io.shodan.app.apk', 'a2ff39d8e7a86d8e0a14368fd278fb03212999b309bc102d39f76ff69ca2a373d3d62a95cea6dbee761ae81ff3daaf83846e49e8ccbf0760276d825493d08652'],
+	'RouterKeygen':
+		['https://github.com/routerkeygen/routerkeygenAndroid/releases/download/v3.15.0/routerkeygen-3-15-0.apk', '95fba11539597eced9f3347f627bf3b24c9abc3c7e039ae1552a9c42c8c70ce362720dc401b85b9faac080d64e67bf594625f80472a492baf676dbe93822fc9e'],
+	'cSploit':
+		['https://github.com/cSploit/android/releases/download/v1.6.6-rc.2/cSploit-release.apk', 'b841c4376836bcc9d23fbc18b40eed70e08018e8eebc6d2d0abad59da63e4b325ffe4d8a4bd36107af63ed20a59c6648d6c4bd1264044267c86693744b15fa75'],
+}
 
 def copytree(src, dst):
 	def shouldcopy(f):
@@ -18,7 +48,7 @@ def copytree(src, dst):
 		return True
 
 	for sdir, subdirs, files in os.walk(src):
-		for d in subdirs:
+		for d in subdirs[:]:
 			if not shouldcopy(d):
 				subdirs.remove(d)
 		ddir = sdir.replace(src, dst, 1)
@@ -33,90 +63,87 @@ def copytree(src, dst):
 					os.remove(dfile)
 				shutil.copy2(sfile, ddir)
 
-def download(url, file_name):
-	# Progress bar http://stackoverflow.com/a/22776
-	f = open(file_name, 'wb')
-	failed = False
+def download(url, file_name, verify_sha):
 	try:
-		u = urllib2.urlopen(url)
-		meta = u.info()
-		file_size = int(meta.getheaders('Content-Length')[0])
-		print 'Downloading: %s (%s bytes)' % (os.path.basename(file_name), file_size)
-		file_size_dl = 0
-		block_sz = 8192
-		while True:
-			file_buf = u.read(block_sz)
-			if not file_buf:
-				break
-			file_size_dl += len(file_buf)
-			f.write(file_buf)
-			status = r"%10d  [%3.2f%%]" % (file_size_dl, file_size_dl * 100. / file_size)
+		u = requests.get(url, stream=True, headers=dl_headers)
+		u.raise_for_status()
+	except requests.exceptions.RequestException as e:
+		abort(str(e))
+
+	download_ok = False
+
+	if u.headers.get('Content-Length'):
+		file_size = int(u.headers['Content-Length'])
+		print('Downloading: %s (%s bytes)' % (os.path.basename(file_name), file_size))
+	else:
+		file_size = 0
+		print('Downloading: %s (unknown size)' % os.path.basename(file_name))
+
+	sha = hashlib.sha512()
+	f = open(file_name, 'wb')
+	try:
+		dl_bytes = 0
+		for chunk in u.iter_content(chunk_size=8192):
+			if not chunk:
+				continue # Ignore empty chunks
+			f.write(chunk)
+			sha.update(chunk)
+			dl_bytes += len(chunk)
+			if file_size:
+				status = r"%10d  [%3.2f%%]" % (dl_bytes, dl_bytes * 100. / file_size)
+			else:
+				status = r"%10d" % dl_bytes
+
 			status = status + chr(8) * (len(status) + 1)
 			print status,
-	except urllib2.HTTPError, e:
-		print('HTTPError = ' + str(e.code))
-		failed = True
-	except urllib2.URLError, e:
-		print('')
-		print('URLError = ' + str(e.reason))
-		failed = True
-	except:
-		print('')
-		failed = True
-	else:
-		print('')
-		print('Download OK: ' + file_name)
+		print
+		download_ok = True
+	except requests.exceptions.RequestException as e:
+		print
+		print('Error: ' + str(e))
+	except KeyboardInterrupt:
+		print
+		print('Download cancelled')
 
+	f.flush()
+	os.fsync(f.fileno())
 	f.close()
 
-	if failed:
+	if download_ok:
+		sha = sha.hexdigest()
+		print('SHA512: ' + sha)
+		if verify_sha:
+			print('Expect: ' + verify_sha)
+			if sha == verify_sha:
+				print('Hash matches: OK')
+			else:
+				download_ok = False
+				print('Hash mismatch!')
+		else:
+			print('Warning: No SHA512 hash specified for verification!')
+
+	if download_ok:
+		print('Download OK: ' + file_name)
+	else:
 		# We should delete partially downloaded file so the next try doesn't skip it!
 		if os.path.isfile(file_name):
 			os.remove(file_name)
-		abort('There was a problem downloading the file')
+		# Better debug what file cannot be downloaded.
+		abort('There was a problem downloading the file "' + file_name  + '"')
 
 def supersu(forcedown, beta):
+	global dl_supersu
+
 	def getdlpage(url):
 		try:
-			bOpener = urllib2.build_opener()
-			bOpener.addheaders = [("User-agent", "Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/33.0.1750.146 Safari/537.36")]
-			pResponse = bOpener.open(url)
-			return pResponse.geturl()
+			u = requests.head(url, headers=dl_headers)
+			return u.url;
+		except requests.exceptions.ConnectionError as e:
+			print('Connection error: ' + str(e))
+		except requests.exceptions.RequestException as e:
+			print('Error: ' + str(e))
 
-		except urllib2.HTTPError, e:
-			print('HTTPError = ' + str(e.code))
-		except urllib2.URLError, e:
-			print('URLError = ' + str(e.reason))
-
-	def extractsu(suzip):
-		arch = {
-			'armv7':os.path.join('boot-patcher', 'arch', 'armhf'),
-			'arm64':os.path.join('boot-patcher', 'arch', 'arm64'),
-			'x64':os.path.join('boot-patcher', 'arch', 'amd64'),
-			'x86':os.path.join('boot-patcher', 'arch', 'i386')
-		}
-		libdir = {
-			'armv7':'lib',
-			'arm64':'lib64',
-			'x64':'lib64',
-			'x86':'lib'
-		}
-
-		try:
-			with zipfile.ZipFile(suzip, 'r') as zf:
-				for key, value in arch.iteritems():
-					fin = key + '/supolicy'
-					fout = os.path.join(value, 'system', 'xbin', 'supolicy')
-					print('Extracting ' + fin + ' to ' + fout)
-					shutil.copyfileobj(zf.open(fin), open(fout, 'wb'))
-					fin = key + '/libsupol.so'
-					fout = os.path.join(value, 'system', libdir[key], 'libsupol.so')
-					print('Extracting ' + fin + ' to ' + fout)
-					shutil.copyfileobj(zf.open(fin), open(fout, 'wb'))
-		except:
-			abort('Unable to extract sepolicy patch from SuperSU zip')
-
-	suzip = os.path.join('update', 'supersu', 'supersu.zip')
+	suzip = os.path.join('update', 'supersu.zip')
 
 	# Remove previous supersu.zip if force redownloading
 	if os.path.isfile(suzip):
@@ -127,38 +154,31 @@ def supersu(forcedown, beta):
 
 	if not os.path.isfile(suzip):
 		if beta:
-			surl = getdlpage('https://download.chainfire.eu/924/SuperSU/BETA-SuperSU-v2.68-20160228150503.zip')
+			surl = getdlpage(dl_supersu['beta'][0])
 		else:
-			surl = getdlpage('https://download.chainfire.eu/supersu-stable')
+			surl = getdlpage(dl_supersu['stable'][0])
 
 		if surl:
-			download(surl + '?retrieve_file=1', suzip)
+			if beta:
+				download(surl + '?retrieve_file=1', suzip, dl_supersu['beta'][1])
+			else:
+				download(surl + '?retrieve_file=1', suzip, dl_supersu['stable'][1])
 		else:
 			abort('Could not retrieve download URL for SuperSU')
 
-	# Extract supolicy and libsupol.so from SuperSU zip
-	extractsu(suzip)
-
 def allapps(forcedown):
-	apps = {
-		'BlueNMEA':'http://max.kellermann.name/download/blue-nmea/BlueNMEA-2.1.3.apk',
-		'Hackerskeyboard':'https://f-droid.org/repo/org.pocketworkstation.pckeyboard_1038002.apk',
-		'Drivedroid':'http://softwarebakery.com/apps/drivedroid/files/drivedroid-free-0.9.29.apk',
-		'USBKeyboard':'https://github.com/pelya/android-keyboard-gadget/raw/master/USB-Keyboard.apk',
-		'RFAnalyzer':'https://github.com/demantz/RFAnalyzer/raw/master/RFAnalyzer.apk',
-		'Shodan':'https://github.com/PaulSec/Shodan.io-mobile-app/raw/master/io.shodan.app.apk',
-		'RouterKeygen':'https://github.com/routerkeygen/routerkeygenAndroid/releases/download/v3.15.0/routerkeygen-3-15-0.apk',
-		'cSploit':'https://github.com/cSploit/android/releases/download/v1.6.5/cSploit-release.apk'
-	}
+	global dl_apps
 
 	app_path = os.path.join('update', 'data', 'app')
 
 	if forcedown:
 		print('Force redownloading all apps')
 
-	for key, value in apps.iteritems():
+	for key, value in dl_apps.iteritems():
 		apk_name = key + '.apk'
 		apk_path = os.path.join(app_path, apk_name)
+		apk_url = value[0]
+		apk_hash = value[1] if len(value) == 2 else False
 
 		# For force redownload, remove previous APK
 		if os.path.isfile(apk_path):
@@ -169,43 +189,53 @@ def allapps(forcedown):
 
 		# Only download apk if we don't have it already
 		if not os.path.isfile(apk_path):
-			download(value, apk_path)
+			download(apk_url, apk_path, apk_hash)
 
 	print('Finished downloading all apps')
 
-def rootfs(forcedown, fs_size):
+def rootfs(forcedown, fs_size, nightly):
 	global Arch
 
-	fs_file = 'kalifs-' + fs_size + '.tar.xz'
-	fs_path = os.path.join('rootfs', Arch, fs_file)
-	fs_host = 'https://images.offensive-security.com/'
-
-	if Arch == 'armhf':
-		fs_url = fs_host + fs_file
-	elif Arch == 'arm64':
-		fs_url = fs_host + 'arm64/' + fs_file
-	elif Arch == 'amd64':
-		fs_url = fs_host + 'arm64/' + fs_file
-	elif Arch == 'i386':
-		fs_url = fs_host + 'i386/' + fs_file
+	# temporary hack until arm64 support is completed
+	if Arch == 'arm64':
+		fs_arch = 'armhf'
 	else:
-		abort('Unknown device architecture: ' + Arch)
+		fs_arch = Arch
+
+	fs_file = 'kalifs-' + fs_arch + '-' + fs_size + '.tar.xz'
+	fs_path = os.path.join('rootfs', fs_file)
+
+	if nightly:
+		fs_host = 'https://build.nethunter.com/kalifs/kalifs-latest/'
+	else:
+		fs_host = 'https://images.offensive-security.com/'
+
+	fs_url = fs_host + fs_file
 
 	if forcedown:
 		# For force redownload, remove previous rootfs
-		print('Force redownloading Kali %s %s rootfs' % (fs_size, Arch))
+		print('Force redownloading Kali %s %s rootfs' % (fs_arch, fs_size))
 		if os.path.isfile(fs_path):
 			os.remove(fs_path)
 
 	# Only download Kali rootfs if we don't have it already
-	if not os.path.isfile(fs_path):
-		download(fs_url, fs_path)
+	if os.path.isfile(fs_path):
+		print('Found Kali %s %s rootfs at: %s' % (fs_arch, fs_size, fs_path))
+	else:
+		print("Downloading from host: %s" % fs_host)
+		download(fs_url, fs_path, False) # We should add SHA512 retrieval function...
 
 def addrootfs(fs_size, dst):
 	global Arch
 
-	fs_file = 'kalifs-' + fs_size + '.tar.xz'
-	fs_path = os.path.join('rootfs', Arch, fs_file)
+	# temporary hack until arm64 support is completed
+	if Arch == 'arm64':
+		fs_arch = 'armhf'
+	else:
+		fs_arch = Arch
+
+	fs_file = 'kalifs-' + fs_arch + '-' + fs_size + '.tar.xz'
+	fs_path = os.path.join('rootfs', fs_file)
 
 	try:
 		zf = zipfile.ZipFile(dst, 'a', zipfile.ZIP_DEFLATED)
@@ -213,7 +243,7 @@ def addrootfs(fs_size, dst):
 		zf.write(os.path.abspath(fs_path), fs_file)
 		print('  Added: ' + fs_file)
 		zf.close()
-	except IOError, e:
+	except IOError as e:
 		print('IOError = ' + e.reason)
 		abort('Unable to add to the zip file')
 
@@ -229,7 +259,7 @@ def zip(src, dst):
 				zf.write(absname, arcname)
 				print('  Added: ' + arcname)
 		zf.close()
-	except IOError, e:
+	except IOError as e:
 		print('IOError = ' + e.reason)
 		abort('Unable to create the ZIP file')
 
@@ -302,13 +332,20 @@ def setupkernel():
 	# Set up variables in boot-patcher.sh
 	print('Kernel: Configuring boot-patcher script for ' + Device)
 	configfile(os.path.join(out_path, 'boot-patcher.sh'), {
-		'boot_block':readkey('block')
+		'boot_block':readkey('block'),
+		'ramdisk_compression':readkey('ramdisk', 'gzip')
 	})
 
-	device_path = os.path.join('kernels', OS, Device)
+	device_path = os.path.join('devices', OS, Device)
 
 	# Copy kernel image from version/device to boot-patcher folder
-	kernel_images = [ 'zImage', 'zImage-dtb', 'Image', 'Image-dtb', 'Image.gz', 'Image.gz-dtb' ]
+	kernel_images = [
+		'zImage', 'zImage-dtb',
+		'Image', 'Image-dtb',
+		'Image.gz', 'Image.gz-dtb',
+		'Image.lz4', 'Image.lz4-dtb',
+		'Image.fit'
+	]
 	kernel_found = False
 	for kernel_image in kernel_images:
 		kernel_location = os.path.join(device_path, kernel_image)
@@ -327,29 +364,29 @@ def setupkernel():
 		print('Found DTB image at: ' + dtb_location)
 		shutil.copy(dtb_location, os.path.join(out_path, 'dtb.img'))
 
-	# Copy any init.d scripts
-	initd_path = os.path.join(device_path, 'init.d')
-	if os.path.exists(initd_path):
-		print('Found additional init.d scripts at: ' + initd_path)
-		copytree(initd_path, os.path.join(out_path, 'system', 'etc', 'init.d'))
-
 	# Copy any patch.d scripts
 	patchd_path = os.path.join(device_path, 'patch.d')
 	if os.path.exists(patchd_path):
 		print('Found additional patch.d scripts at: ' + patchd_path)
 		copytree(patchd_path, os.path.join(out_path, 'patch.d'))
 
+	# Copy any ramdisk files
+	ramdisk_path = os.path.join(device_path, 'ramdisk')
+	if os.path.exists(ramdisk_path):
+		print('Found additional ramdisk files at: ' + ramdisk_path)
+		copytree(ramdisk_path, os.path.join(out_path, 'ramdisk-patch'))
+
 	# Copy any modules
 	modules_path = os.path.join(device_path, 'modules')
 	if os.path.exists(modules_path):
 		print('Found additional kernel modules at: ' + modules_path)
-		copytree(modules_path, os.path.join(out_path, LibDir, 'modules'))
+		copytree(modules_path, os.path.join(out_path, 'modules'))
 
-	# Copy any device specific firmware
-	firmware_path = os.path.join(device_path, 'firmware')
-	if os.path.exists(firmware_path):
-		print('Found additional firmware binaries at: ' + firmware_path)
-		copytree(firmware_path, os.path.join(out_path, 'system', 'etc', 'firmware'))
+	# Copy any device specific system binaries, libs, or init.d scripts
+	system_path = os.path.join(device_path, 'system')
+	if os.path.exists(system_path):
+		print('Found additional /system files at: ' + system_path)
+		copytree(system_path, os.path.join(out_path, 'system'))
 
 	# Copy any /data/local folder files
 	local_path = os.path.join(device_path, 'local')
@@ -374,6 +411,12 @@ def setupupdate():
 
 	print('NetHunter: Copying ' + Arch + ' arch specific update files...')
 	copytree(os.path.join('update', 'arch', Arch), out_path)
+
+	# Set up variables in update-binary script
+	print('NetHunter: Configuring installer script for ' + Device)
+	configfile(os.path.join(out_path, 'META-INF', 'com', 'google', 'android', 'update-binary'), {
+		'supersu':readkey('supersu')
+	})
 
 def cleanup(domsg):
 	if os.path.exists('tmp_out'):
@@ -410,8 +453,9 @@ def main():
 	global IgnoredFiles
 	global TimeStamp
 
-	supersu_beta = True
+	supersu_beta = False
 
+	devices_cfg = os.path.join('devices', 'devices.cfg')
 	IgnoredFiles = ['arch', 'placeholder', '.DS_Store', '.git*', '.idea']
 	t = datetime.datetime.now()
 	TimeStamp = "%04d%02d%02d_%02d%02d%02d" % (t.year, t.month, t.day, t.hour, t.minute, t.second)
@@ -422,10 +466,10 @@ def main():
 	# Read devices.cfg, get device names
 	try:
 		Config = ConfigParser.ConfigParser()
-		Config.read('devices.cfg')
+		Config.read(devices_cfg)
 		devicenames = Config.sections()
 	except:
-		abort('Could not read devices.cfg')
+		abort('Could not read %s! Maybe you need to run ./bootstrap.sh?' % devices_cfg)
 
 	help_device = 'Allowed device names: \n'
 	for device in devicenames:
@@ -436,12 +480,15 @@ def main():
 	parser.add_argument('--kitkat', '-kk', action='store_true', help='Android 4.4.4')
 	parser.add_argument('--lollipop', '-l', action='store_true', help='Android 5')
 	parser.add_argument('--marshmallow', '-m', action='store_true', help='Android 6')
-	parser.add_argument('--nutella', '-n', action='store_true', help='Android 7')
+	parser.add_argument('--nougat', '-n', action='store_true', help='Android 7')
 	parser.add_argument('--forcedown', '-f', action='store_true', help='Force redownloading')
 	parser.add_argument('--uninstaller', '-u', action='store_true', help='Create an uninstaller')
 	parser.add_argument('--kernel', '-k', action='store_true', help='Build kernel installer only')
 	parser.add_argument('--nokernel', '-nk', action='store_true', help='Build without the kernel installer')
 	parser.add_argument('--nosu', '-ns', action='store_true', help='Build without SuperSU installer')
+	parser.add_argument('--nobrand', '-nb', action='store_true', help='Build without wallpaper or boot animation')
+	parser.add_argument('--nofreespace', '-nf', action='store_true', help='Build without free space check')
+	parser.add_argument('--nightly', '-ni', action='store_true', help='Use nightly mirror for Kali rootfs download (experimental)')
 	parser.add_argument('--generic', '-g', action='store', metavar='ARCH', help='Build a generic installer (modify ramdisk only)')
 	parser.add_argument('--rootfs', '-fs', action='store', metavar='SIZE', help='Build with Kali chroot rootfs (full or minimal)')
 	parser.add_argument('--release', '-r', action='store', metavar='VERSION', help='Specify NetHunter release version')
@@ -450,18 +497,21 @@ def main():
 
 	if args.kernel and args.nokernel:
 		abort('You seem to be having trouble deciding whether you want the kernel installer or not')
+	if args.device and args.generic:
+		abort('The device and generic switches are mutually exclusive')
 
 	if args.device:
 		if args.device in devicenames:
 			Device = args.device
 		else:
-			abort('Device %s not found devices.cfg' % args.device)
+			abort('Device %s not found in %s' % (args.device, devices_cfg))
 	elif args.generic:
 		Arch = args.generic
 		Device = 'generic'
 		setuparch()
 	elif args.forcedown:
-		supersu(True, supersu_beta)
+		if not args.nosu:
+			supersu(True, supersu_beta)
 		allapps(True)
 		done()
 	elif not args.uninstaller:
@@ -482,13 +532,13 @@ def main():
 		if args.marshmallow:
 			OS = 'marshmallow'
 			i += 1
-		if args.nutella:
-			OS = 'nutella'
+		if args.nougat:
+			OS = 'nougat'
 			i += 1
 		if i == 0:
-			abort('Missing Android version. Available options: --kitkat, --lollipop, --marshmallow, --nutella')
+			abort('Missing Android version. Available options: --kitkat, --lollipop, --marshmallow, --nougat')
 		elif i > 1:
-			abort('Select only one Android version: --kitkat, --lollipop, --marshmallow, --nutella')
+			abort('Select only one Android version: --kitkat, --lollipop, --marshmallow, --nougat')
 
 		if args.rootfs and not (args.rootfs == 'full' or args.rootfs == 'minimal'):
 			abort('Invalid Kali rootfs size. Available options: --rootfs full, --rootfs minimal')
@@ -508,16 +558,16 @@ def main():
 	if not (args.device or args.generic):
 		done()
 
-	# Download SuperSU, we need it for both the kernel and update installer
-	supersu(args.forcedown, supersu_beta)
-
-	# We don't need the apps if we are only building the kernel installer
+	# We don't need the apps or SuperSU if we are only building the kernel installer
 	if not args.kernel:
 		allapps(args.forcedown)
+		# Download SuperSU unless we don't want it
+		if not args.nosu:
+			supersu(args.forcedown, supersu_beta)
 
 	# Download Kali rootfs if we are building a zip with the chroot environment included
 	if args.rootfs:
-		rootfs(args.forcedown, args.rootfs)
+		rootfs(args.forcedown, args.rootfs, args.nightly)
 
 	# Set file name tag depending on the options chosen	
 	file_tag = Device
@@ -525,12 +575,23 @@ def main():
 		file_tag += '-' + OS
 	else:
 		file_tag += '-' + Arch
+	if args.nobrand and not args.kernel:
+		file_tag += '-nobrand'
 	if args.rootfs:
 		file_tag += '-kalifs-' + args.rootfs
 	if args.release:
 		file_tag += '-' + args.release
 	else:
 		file_tag += '-' + TimeStamp
+
+	# Don't include wallpaper or boot animation if --nobrand is specified
+	if args.nobrand:
+		IgnoredFiles.append('wallpaper')
+		IgnoredFiles.append('bootanimation.zip')
+
+	# Don't include free space script if --nofreespace is specified
+	if args.nofreespace:
+		IgnoredFiles.append('freespace.sh')
 
 	# Don't set up the kernel installer if --nokernel is specified
 	if not args.nokernel:
@@ -547,7 +608,7 @@ def main():
 
 	# Don't include SuperSU if --nosu is specified
 	if args.nosu:
-		IgnoredFiles.append('supersu')
+		IgnoredFiles.append('supersu.zip')
 
 	# Set up the update zip
 	setupupdate()

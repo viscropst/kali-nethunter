@@ -1,7 +1,7 @@
 {
-	"version_code": 19
-	"chroot_version": 2,
-	"chroot_sha512_full": "45af3ed319e520b85693edb2058a82b942f875a0c7f4729dd3e3eae6f110c7d106a7423639a58c53247be3e95bf977b2107877fdb0a77b6f7b06286e73e75151",
-	"chroot_sha512_min": "2d087f12d40ff28e9c475492f87841a7be5c1657edbadab1e90d9f9691c0baca66d1b5be283c778bb18b4dd2ff3dbf66d44aa3376aed7493b68e6e4993e7dc17",
-	"content": "Version 3.1 <p>New Features</P><li>Wardriving - Kismet support</li><li>Bettercap added in mana</li><li>Hostapd-wpe support</li><p>Fixes</P><li>Add symlink to /dev/net/tun</li><li>Duckhunter regex fix</li><li>Prefer NH busybox</li><li>MITMf misc fix</li>"
+	"version_code": 21,
+	"chroot_version": 3,
+	"chroot_sha512_full": "68a3c557e14ec301fd37831793485c2280b9f706975cff3f9f9cf4000c9703b27dd21b5e076bded0ceff6e5652efc225b0dc76aa391ac5a7e90d683e3b43b647",
+	"chroot_sha512_min": "86752fba98b54daf5f66d04b1306ebebb25ea434bd5f17aa53b53c75aef6e9309084e0e6c01b94461dcb5615e4dd9eb97ac1d8973ebadcd1f6962b99312ae7e5",
+	"content": "Version 3.15.4 <p>Wardriving fix added by @ilakattack (needs nethunter-utils update)</p>"
 }
